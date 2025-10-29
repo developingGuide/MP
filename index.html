@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>CCM Fuel Cell Interactive Demo</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <!-- Plotly CDN -->
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; margin: 18px; }
+    h1 { margin-bottom: 6px; }
+    .row { display:flex; gap:18px; align-items:flex-start; }
+    .panel { background:#fafafa; border:1px solid #eee; padding:12px; border-radius:8px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+    .controls { width:320px; }
+    label { display:block; margin-top:8px; font-weight:600; }
+    input[type=range] { width:100%; }
+    small { color:#555; }
+    #diagram { width: 480px; height: 260px; border-radius:8px; background: linear-gradient(180deg,#fff,#f6fbff); display:flex; align-items:center; justify-content:center; }
+    #plots { flex:1; min-width:520px; }
+    .stat { font-size:14px; margin-top:8px; }
+  </style>
+</head>
+<body>
+  <h1>CCM / PEM Fuel Cell interactive — polarization & power</h1>
+  <p>Adjust catalyst loading, temperature and relative humidity to see how a CCM-driven cell responds. This is a didactic simulation (simplified model) for demonstration and teaching.</p>
+
+  <div class="row">
+    <div class="panel controls">
+      <label>Catalyst loading (mg Pt / cm²): <span id="lblLoading">0.2</span></label>
+      <input id="loading" type="range" min="0.02" max="0.6" step="0.01" value="0.20" />
+
+      <label>Temperature (°C): <span id="lblTemp">80</span></label>
+      <input id="temp" type="range" min="40" max="95" step="1" value="80" />
+
+      <label>Relative Humidity (%): <span id="lblRH">80</span></label>
+      <input id="rh" type="range" min="20" max="100" step="1" value="80" />
+
+      <label>Stoichiometry (H₂ / O₂, relative): <span id="lblStoich">1.5</span></label>
+      <input id="stoich" type="range" min="1.0" max="3.0" step="0.1" value="1.5" />
+
+      <div class="stat">
+        <div>Max power (approx): <strong id="maxPower">—</strong> W/cm²</div>
+        <div>Voltage at 1 A/cm²: <strong id="vAt1">—</strong> V</div>
+      </div>
+
+      <!-- fjkowfj -->
+
+      <div style="margin-top:12px;">
+        <button id="exportCSV">Export CSV</button>
+      </div>
+    </div>
+
+    <div class="panel" id="plots">
+      <div id="plotPolar" style="height:360px;"></div>
+      <div id="plotPower" style="height:240px; margin-top:12px;"></div>
+    </div>
+
+    <div class="panel" style="width:480px;">
+      <div id="diagram">
+        <!-- Simple interactive SVG idea placeholder -->
+        <svg width="430" height="220" viewBox="0 0 430 220" xmlns="http://www.w3.org/2000/svg">
+          <rect x="10" y="20" width="410" height="180" rx="8" fill="#ffffff" stroke="#d7e9ff"/>
+          <text x="215" y="40" text-anchor="middle" font-weight="700">PEM CCM Cross-section</text>
+
+          <!-- Membrane -->
+          <rect x="160" y="80" width="110" height="60" fill="#fff7e6" stroke="#f0c27b"/>
+          <text x="215" y="105" text-anchor="middle" font-size="11">Membrane</text>
+
+          <!-- Catalyst layers -->
+          <rect x="152" y="78" width="8" height="64" fill="#f5c6e8" stroke="#e79acb" />
+          <rect x="270" y="78" width="8" height="64" fill="#c6dbff" stroke="#8bb4ff" />
+          <text x="130" y="150" font-size="11">Anode catalyst</text>
+          <text x="300" y="150" font-size="11">Cathode catalyst</text>
+
+          <!-- Gas diffusion layers -->
+          <rect x="100" y="70" width="40" height="80" fill="#eef7f1" stroke="#bfe6c6" />
+          <rect x="290" y="70" width="40" height="80" fill="#eef7f1" stroke="#bfe6c6" />
+          <text x="120" y="95" font-size="11">Anode GDL</text>
+          <text x="310" y="95" font-size="11">Cathode GDL</text>
+
+          <!-- Hotspots (simple) -->
+          <g id="hot_anode" style="cursor:pointer">
+            <circle cx="120" cy="120" r="10" fill="#ffeb99" stroke="#d7b500"/>
+            <title>Anode: H₂ inlet side — click for info</title>
+          </g>
+          <g id="hot_cathode" style="cursor:pointer">
+            <circle cx="310" cy="120" r="10" fill="#99e6ff" stroke="#0088c7"/>
+            <title>Cathode: O₂ / air inlet side — click for info</title>
+          </g>
+        </svg>
+      </div>
+
+      <div style="margin-top:10px;">
+        <div id="hotInfo"><small>Click the yellow or blue dots on the diagram to learn more about that layer.</small></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // Simple didactic polarization model: V(i) = E0 - activation(i) - ohmic(i) - concentration(i)
+  // This is a phenomenological model for teaching, not a full electrochemical simulator.
+  function generatePolarization(loading, T, RH, stoich) {
+    const E0 = 1.00;               // open-circuit approx baseline (V)
+    const iMax = 2.5;             // A/cm^2
+    const nPoints = 200;
+    const xs = new Array(nPoints);
+    const vs = new Array(nPoints);
+    const ps = new Array(nPoints);
+
+    // Parameter heuristics (tunable)
+    // activation factor scales inversely with catalyst loading (lower loading -> higher activation loss)
+    const actBase = 0.04; // baseline activation magnitude
+    const actLoadFactor = 0.25 / Math.max(loading, 0.02); // stronger as loading decreases
+
+    // temperature effect (higher T reduces activation losses)
+    const Tref = 80;
+    const tempFactor = 1 - 0.004 * (T - Tref); // small improvement per deg C
+
+    // RH effect (too low RH increases ohmic)
+    const ohmicBase = 0.08; // base ohmic resistance (ohm·cm^2)
+    const rhEffect = (1 + 0.8 * Math.max(0, (60 - RH) / 60)); // higher when RH < 60%
+
+    // stoich influences concentration region (poor stoich -> earlier mass transport losses)
+    const stoichFactor = Math.max(0.6, 1.0 - 0.25 * (stoich - 1.0));
+
+    for (let k = 0; k < nPoints; k++) {
+      const i = (k / (nPoints - 1)) * iMax; // current density A/cm^2
+      xs[k] = i;
+
+      // Activation polarization (use log behavior)
+      const activation = actBase * actLoadFactor * Math.log(1 + 1.5 * i) * tempFactor;
+
+      // Ohmic drop: R_ohm * i. R_ohm increases with RH deficiency and decreased hydration
+      const R_ohm = ohmicBase * rhEffect;
+      const ohmic = R_ohm * i;
+
+      // Concentration polarization (exponential near iMax; affected by stoich)
+      // small multiplier to make conc losses kick in near high currents
+      const concSlope = 1.8 * (1.0 / stoichFactor);
+      const conc = Math.max(0, 0.12 * Math.exp(concSlope * (i / iMax)));
+
+      let V = E0 - activation - ohmic - conc;
+      if (V < 0) V = 0; // floor
+
+      vs[k] = V;
+      ps[k] = V * i; // power density W/cm^2
+    }
+    return { i: xs, v: vs, p: ps };
+  }
+
+  // UI wiring
+  const loadingEl = document.getElementById('loading');
+  const tempEl = document.getElementById('temp');
+  const rhEl = document.getElementById('rh');
+  const stoichEl = document.getElementById('stoich');
+
+  function updateLabels(){
+    document.getElementById('lblLoading').textContent = Number(loadingEl.value).toFixed(2);
+    document.getElementById('lblTemp').textContent = tempEl.value;
+    document.getElementById('lblRH').textContent = rhEl.value;
+    document.getElementById('lblStoich').textContent = Number(stoichEl.value).toFixed(1);
+  }
+  updateLabels();
+
+  function renderAll(){
+    updateLabels();
+    const loading = parseFloat(loadingEl.value);
+    const T = parseFloat(tempEl.value);
+    const RH = parseFloat(rhEl.value);
+    const stoich = parseFloat(stoichEl.value);
+
+    const out = generatePolarization(loading, T, RH, stoich);
+
+    // Polarization plot
+    const traceV = { x: out.i, y: out.v, mode:'lines', name:'Voltage (V)', yaxis:'y1' };
+    // mark regions approx: activation < 0.2A/cm2, ohmic 0.2-1.0, conc > 1.0
+    const layoutV = {
+      title: 'Polarization curve (Voltage vs Current density)',
+      xaxis: { title: 'Current density (A/cm²)' },
+      yaxis: { title: 'Cell voltage (V)', range: [0,1.05] },
+      shapes: [
+        { type:'rect', x0:0, x1:0.2, y0:0, y1:1.05, fillcolor:'#ffeeee', opacity:0.12, line:{width:0} },
+        { type:'rect', x0:0.2, x1:1.0, y0:0, y1:1.05, fillcolor:'#eeffef', opacity:0.08, line:{width:0} },
+        { type:'rect', x0:1.0, x1:2.5, y0:0, y1:1.05, fillcolor:'#eef3ff', opacity:0.08, line:{width:0} }
+      ],
+      annotations:[
+        { x:0.08, y:0.95, text:'Activation region', showarrow:false, font:{size:11}},
+        { x:0.6, y:0.95, text:'Ohmic region', showarrow:false, font:{size:11}},
+        { x:1.6, y:0.95, text:'Concentration region', showarrow:false, font:{size:11}}
+      ]
+    };
+    Plotly.react('plotPolar', [traceV], layoutV, {responsive:true});
+
+    // Power plot
+    const traceP = { x: out.i, y: out.p, mode:'lines', name:'Power (W/cm²)' };
+    const layoutP = { title:'Power density (W/cm²) vs Current density', xaxis:{title:'Current density (A/cm²)'}, yaxis:{title:'Power (W/cm²)'}};
+    Plotly.react('plotPower', [traceP], layoutP, {responsive:true});
+
+    // Stats
+    const maxPower = Math.max(...out.p);
+    document.getElementById('maxPower').textContent = maxPower.toFixed(3);
+    // interpolate voltage at 1 A/cm2
+    const idx1 = out.i.findIndex(x=>x>=1.0);
+    const v1 = out.v[idx1] || 0;
+    document.getElementById('vAt1').textContent = v1.toFixed(3);
+  }
+
+  // initial render
+  renderAll();
+
+  // events
+  [loadingEl,tempEl,rhEl,stoichEl].forEach(el => el.addEventListener('input', renderAll));
+
+  // diagram hotspot interaction
+  document.getElementById('hotInfo').addEventListener('click', (ev) => {
+    // noop placeholder
+  });
+  document.querySelector('#diagram svg #hot_anode').addEventListener('click', ()=> {
+    document.getElementById('hotInfo').innerHTML = '<strong>Anode (H₂ side):</strong> Hydrogen gas diffuses through the GDL to the anode catalyst where H₂ is oxidized to protons. Catalyst loading affects activation losses and kinetics.';
+  });
+  document.querySelector('#diagram svg #hot_cathode').addEventListener('click', ()=> {
+    document.getElementById('hotInfo').innerHTML = '<strong>Cathode (O₂ side):</strong> Oxygen (air) diffuses through the cathode GDL; ORR kinetics are slow and depend strongly on catalyst activity and mass transport.';
+  });
+
+  // Export CSV
+  document.getElementById('exportCSV').addEventListener('click', ()=>{
+    const loading = parseFloat(loadingEl.value), T = parseFloat(tempEl.value), RH = parseFloat(rhEl.value), stoich = parseFloat(stoichEl.value);
+    const out = generatePolarization(loading, T, RH, stoich);
+    let csv = 'i_A_per_cm2,voltage_V,power_W_per_cm2\n';
+    for(let k=0;k<out.i.length;k++){
+      csv += out.i[k].toFixed(4)+','+out.v[k].toFixed(6)+','+out.p[k].toFixed(6)+'\n';
+    }
+    const blob = new Blob([csv], {type: 'text/csv'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'ccm_simulation.csv'; a.click();
+    URL.revokeObjectURL(url);
+  });
+</script>
+</body>
+</html>

@@ -157,6 +157,40 @@ function createGDL(width, height, depth, color, yPos, name) {
   return group;
 }
 
+function createLabel(text, positionY) {
+  const canvas = document.createElement('canvas');
+  const dpi = 1000; // higher resolution for crispness
+  canvas.width = dpi;
+  canvas.height = dpi;
+  const ctx = canvas.getContext('2d');
+
+  // Background for readability
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(0, 0, dpi, dpi);
+
+  // Text
+  ctx.font = 'bold 80px Arial';
+  ctx.fillStyle = 'white';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, dpi / 2, dpi / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter; // prevents blur
+  texture.needsUpdate = true;
+
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+  const sprite = new THREE.Sprite(material);
+
+  // Adjust scale to keep text proportions correct
+  const aspect = canvas.width / canvas.height;
+  sprite.scale.set(1 * aspect, 0.5, 1); // tweak X/Y to fit nicely
+  sprite.position.set(2.2, positionY, 0);
+  sprite.visible = false; // start hidden
+  scene.add(sprite);
+  return sprite;
+}
+
 
 // Starting Y position
 let currentY = 0;
@@ -213,7 +247,11 @@ layers.forEach(layer => {
   else if (layer.type === 'Gas Diffusion Layer') obj = createGDL(width, layer.h, depth, layer.color, currentY, layer.type);
   else obj = createLayer(width, layer.h, depth, layer.color, currentY, layer.type);
 
-  stackObjects.push({ object: obj, baseY: currentY });
+  stackObjects.push({
+    object: obj,
+    baseY: currentY,
+    label: createLabel(layer.type, currentY)
+  });
   currentY += layer.h / 2;
 });
 
@@ -246,7 +284,11 @@ function animate() {
       ? item.baseY + index * explodeDistance
       : item.baseY;
 
-    item.object.position.y += (targetY - item.object.position.y) * 0.15; // Smooth transition
+    item.object.position.y += (targetY - item.object.position.y) * 0.15;
+
+    // Show labels only when expanded
+    item.label.visible = exploded;
+    item.label.position.y = item.object.position.y; // sync label position
   });
 
   renderer.render(scene, camera);

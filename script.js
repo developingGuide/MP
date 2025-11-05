@@ -32,6 +32,132 @@ function createLayer(width, height, depth, color, yPos, name) {
   return mesh;
 }
 
+function createGraphitePlate(width, height, depth, color, yPos, name) {
+  const group = new THREE.Group();
+
+  const base = new THREE.Mesh(
+    new THREE.BoxGeometry(width, height, depth),
+    new THREE.MeshStandardMaterial({ color, roughness: 0.8, metalness: 0.1 })
+  );
+  group.add(base);
+
+  // Visible grooves
+  for (let i = -1; i <= 1; i++) {
+    const groove = new THREE.Mesh(
+      new THREE.BoxGeometry(width * 0.9, height * 1.01, 0.05),
+      new THREE.MeshStandardMaterial({ color: 0x0d0d0d })
+    );
+    groove.position.set(0, 0, i * 0.45);
+    group.add(groove);
+  }
+
+  group.position.y = yPos;
+  group.name = name;
+  scene.add(group);
+  return group;
+}
+
+
+// Catalyst-Coated Membrane (thin transparent layer)
+function createMembrane(width, height, depth, yPos, name) {
+  const geometry = new THREE.BoxGeometry(width, height, depth);
+  const material = new THREE.MeshStandardMaterial({
+    color: 0xffcccc,
+    transparent: true,
+    opacity: 0.6
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.y = yPos;
+  mesh.name = name;
+  scene.add(mesh);
+  return mesh;
+}
+
+// Improved Gasket (thin ring frame)
+function createGasket(width, height, depth, color, yPos, name) {
+  const outer = new THREE.BoxGeometry(width, height, depth);
+  const inner = new THREE.BoxGeometry(width * 0.8, height * 1.1, depth * 0.8);
+
+  // Boolean subtract using THREE shape group
+  const outerMesh = new THREE.Mesh(outer);
+  const innerMesh = new THREE.Mesh(inner);
+  const gasketGroup = new THREE.Group();
+
+  outerMesh.material = new THREE.MeshStandardMaterial({ color });
+  innerMesh.material = new THREE.MeshStandardMaterial({ color: 0x000000, transparent: true, opacity: 0 });
+
+  gasketGroup.add(outerMesh);
+  gasketGroup.add(innerMesh);
+  gasketGroup.position.y = yPos;
+  gasketGroup.name = name;
+  scene.add(gasketGroup);
+
+  return gasketGroup;
+}
+
+// ✅ Improved Frame / End Plate (with inlet/outlet holes)
+function createFrame(width, height, depth, color, yPos, name) {
+  const group = new THREE.Group();
+
+  const plateGeometry = new THREE.BoxGeometry(width, height, depth);
+  const plateMaterial = new THREE.MeshStandardMaterial({ color });
+  const plate = new THREE.Mesh(plateGeometry, plateMaterial);
+  group.add(plate);
+
+  // Inlet/outlet circular holes (visually represented as black cylinders)
+  const holeGeometry = new THREE.CylinderGeometry(0.25, 0.25, height + 0.01, 32);
+  const holeMaterial = new THREE.MeshStandardMaterial({ color: 0x000000 });
+
+  const inlet = new THREE.Mesh(holeGeometry, holeMaterial);
+  inlet.position.set(1, 0, 1);
+  inlet.rotation.z = Math.PI / 2;
+  group.add(inlet);
+
+  const outlet = new THREE.Mesh(holeGeometry, holeMaterial);
+  outlet.position.set(-1, 0, -1);
+  outlet.rotation.z = Math.PI / 2;
+  group.add(outlet);
+
+  group.position.y = yPos;
+  group.name = name;
+  scene.add(group);
+  return group;
+}
+
+// ✅ Improved Gas Diffusion Layer (perforated texture / carbon mesh look)
+function createGDL(width, height, depth, color, yPos, name) {
+  const group = new THREE.Group();
+
+  // Tiny bumps/holes to simulate porous material
+  const baseGeometry = new THREE.BoxGeometry(width, height, depth);
+  const baseMaterial = new THREE.MeshStandardMaterial({
+    color,
+    roughness: 0.8,
+    metalness: 0.2
+  });
+  const base = new THREE.Mesh(baseGeometry, baseMaterial);
+  group.add(base);
+
+  // Add small black circles as pores
+  for (let x = -1; x <= 1; x += 1) {
+    for (let z = -1; z <= 1; z += 1) {
+      const pore = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.05, 0.05, height + 0.01, 16),
+        new THREE.MeshStandardMaterial({ color: 0x000000 })
+      );
+      pore.position.set(x, 0, z);
+      pore.rotation.z = Math.PI / 2;
+      group.add(pore);
+    }
+  }
+
+  group.position.y = yPos;
+  group.name = name;
+  scene.add(group);
+  return group;
+}
+
+
 // Starting Y position
 let currentY = 0;
 
@@ -75,11 +201,23 @@ const layers = [
 ];
 
 // Build layers stacked vertically
+const stackObjects = [];
 layers.forEach(layer => {
   currentY += layer.h / 2;
-  createLayer(width, layer.h, depth, layer.color, currentY, layer.type);
+  let obj;
+
+  if (layer.type === 'Gasket') obj = createGasket(width, layer.h, depth, layer.color, currentY, layer.type);
+  else if (layer.type === 'Graphite Plate') obj = createGraphitePlate(width, layer.h, depth, layer.color, currentY, layer.type);
+  else if (layer.type === 'Catalyst-Coated Membrane') obj = createMembrane(width, layer.h, depth, currentY, layer.type);
+  else if (layer.type === 'Frame / End Plate') obj = createFrame(width, layer.h, depth, layer.color, currentY, layer.type);
+  else if (layer.type === 'Gas Diffusion Layer') obj = createGDL(width, layer.h, depth, layer.color, currentY, layer.type);
+  else obj = createLayer(width, layer.h, depth, layer.color, currentY, layer.type);
+
+  stackObjects.push({ object: obj, baseY: currentY });
   currentY += layer.h / 2;
 });
+
+
 
 // Add connector pipes (gas inlet/outlet)
 const pipeGeometry = new THREE.CylinderGeometry(0.15, 0.15, currentY, 16);
@@ -92,13 +230,38 @@ const pipe2 = new THREE.Mesh(pipeGeometry, pipeMaterial);
 pipe2.position.set(-1.2, currentY / 2, -1.2);
 scene.add(pipe2);
 
-// Animation
+let exploded = false;
+const explodeDistance = 0.5;
+
+document.getElementById("expandBtn").addEventListener('click', () => {
+  exploded = !exploded;
+});
+
 function animate() {
   requestAnimationFrame(animate);
   controls.update();
+
+  stackObjects.forEach((item, index) => {
+    const targetY = exploded
+      ? item.baseY + index * explodeDistance
+      : item.baseY;
+
+    item.object.position.y += (targetY - item.object.position.y) * 0.15; // Smooth transition
+  });
+
   renderer.render(scene, camera);
 }
 animate();
+
+
+
+// Animation
+// function animate() {
+//   requestAnimationFrame(animate);
+//   controls.update();
+//   renderer.render(scene, camera);
+// }
+// animate();
 
 // Resize handler
 window.addEventListener('resize', () => {
